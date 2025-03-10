@@ -1,0 +1,25 @@
+# Linux
+*~
+~*
+.nfs*
+*.swp
+.fuse_hidden*
+.directory
+.Trash-*
+
+# out/executable files
+*.o
+*.out
+*.exe
+output
+
+# vscode files
+.vscode
+
+# files and directories named "temp"
+temp*
+*.tmp
+
+# Mac
+__MACOSX
+*.DS_Store
