@@ -23,3 +23,6 @@ temp*
 # Mac
 __MACOSX
 *.DS_Store
+
+# JetBrains yippee
+.idea
