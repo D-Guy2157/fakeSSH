@@ -33,9 +33,7 @@ def log_attempt(client_ip, username, password):
 
 # Handler
 class HoneypotHandler(paramiko.ServerInterface):
-    """
-    Handler subclass for the honeypot server.
-    """
+    """Handler subclass for the honeypot server."""
     def __init__(self, client_ip):
         self.client_ip = client_ip
         self.event = threading.Event()
@@ -46,25 +44,21 @@ class HoneypotHandler(paramiko.ServerInterface):
         return paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
 
     def check_auth_password(self, username, password):
-        """Always fails authentication, makes honeypot safe"""
+        """Always fails authentication"""
         log_attempt(self.client_ip, username, password)
         return paramiko.AUTH_FAILED # Always fail auth
 
 class HoneypotTransport(paramiko.Transport):
-    """
-    Transport subclass to enforce immediate disconnect on invalid content.
-    """
+    """Transport subclass to enforce immediate disconnect on invalid content."""
     def _check_banner(self):
-        """
-        Enforces immediate disconnect on invalid SSH banner. Only reads one line.
-        """
+        """Enforces immediate disconnect on invalid SSH banner. Only reads one line."""
         client_ip = self.sock.getpeername()[0]
         try:
             buf = self.packetizer.readline(self.banner_timeout) # Read only one line
         except Exception as e:
             raise paramiko.SSHException("Error reading SSH protocol banner" + str(e))
 
-        self._log(paramiko.common.DEBUG, "Banner: " + buf)
+        self._log(paramiko.common.DEBUG, f"Banner: {buf}")
         match = re.match(r"SSH-(\d+\.\d+)-(.*)", buf)
         if match is None:
             print(f"[-] Invalid SSH identification string from {client_ip}, closing connection.")
