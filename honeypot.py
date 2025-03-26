@@ -33,6 +33,9 @@ def log_attempt(client_ip, username, password):
 
 # Handler
 class HoneypotHandler(paramiko.ServerInterface):
+    """
+    Handler subclass for the honeypot server.
+    """
     def __init__(self, client_ip):
         self.client_ip = client_ip
         self.event = threading.Event()
@@ -43,18 +46,19 @@ class HoneypotHandler(paramiko.ServerInterface):
         return paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
 
     def check_auth_password(self, username, password):
+        """Always fails authentication, makes honeypot safe"""
         log_attempt(self.client_ip, username, password)
         return paramiko.AUTH_FAILED # Always fail auth
 
-# I LOVE MONKEY PATCHING
 class HoneypotTransport(paramiko.Transport):
     """
-    Custom transport class to enforce immediate disconnect on invalid content.
+    Transport subclass to enforce immediate disconnect on invalid content.
     """
     def _check_banner(self):
         """
         Enforces immediate disconnect on invalid SSH banner. Only reads one line.
         """
+        client_ip = self.sock.getpeername()[0]
         try:
             buf = self.packetizer.readline(self.banner_timeout) # Read only one line
         except Exception as e:
@@ -63,7 +67,7 @@ class HoneypotTransport(paramiko.Transport):
         self._log(paramiko.common.DEBUG, "Banner: " + buf)
         match = re.match(r"SSH-(\d+\.\d+)-(.*)", buf)
         if match is None:
-            print(f"[-] Invalid SSH identification string from {self.sock.getpeername()[0]}, closing connection.")
+            print(f"[-] Invalid SSH identification string from {client_ip}, closing connection.")
             try:
                 self.sock.sendall(b"Invalid SSH identification string.\n")
             except:
@@ -88,6 +92,7 @@ class HoneypotTransport(paramiko.Transport):
             raise paramiko.ssh_exception.IncompatiblePeer(msg)
         msg = f"Connected (version {version}, client {client})"
         self._log(paramiko.common.INFO, msg)
+        print(f"[++] Valid SSH banner received from {client_ip}: {self.remote_version}")
 
 def handle_client(client_socket, client_ip):
     try:
@@ -102,7 +107,7 @@ def handle_client(client_socket, client_ip):
         if chan is None:
             raise Exception("No channel")
     except Exception as e:
-        print(f"[!] Exception: {e}")
+        print(f"[!] Exception for {client_ip}: {e}")
     finally:
         client_socket.close()
 
