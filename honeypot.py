@@ -2,13 +2,15 @@
 # driver for the fake ssh / honeypot
 import logging
 import os
+import re
 import socket
 import threading
 
-import paramiko # (I'm not cracked enough to make my own SSH implementation... yet)
+import paramiko # (I'm not cracked enough to rewrite SSH transport... yet)
 
 # Fake host key
 HOST_KEY_FILE = "host_key.pem"
+CUSTOM_BANNER = "SSH-2.0-OpenSSH_9.9p2 Debian-1"
 
 # Basic Logging
 logging.basicConfig(filename="honeypot.log", level=logging.INFO, format="%(asctime)s - %(message)s")
@@ -44,12 +46,57 @@ class HoneypotHandler(paramiko.ServerInterface):
         log_attempt(self.client_ip, username, password)
         return paramiko.AUTH_FAILED # Always fail auth
 
-def handle_client(client_socket, client_ip):
-    transport = paramiko.Transport(client_socket)
-    transport.add_server_key(HOST_KEY)
-    server = HoneypotHandler(client_ip)
+# I LOVE MONKEY PATCHING
+class HoneypotTransport(paramiko.Transport):
+    """
+    Custom transport class to enforce immediate disconnect on invalid content.
+    """
+    def _check_banner(self):
+        """
+        Enforces immediate disconnect on invalid SSH banner. Only reads one line.
+        """
+        try:
+            buf = self.packetizer.readline(self.banner_timeout) # Read only one line
+        except Exception as e:
+            raise paramiko.SSHException("Error reading SSH protocol banner" + str(e))
 
+        self._log(paramiko.common.DEBUG, "Banner: " + buf)
+        match = re.match(r"SSH-(\d+\.\d+)-(.*)", buf)
+        if match is None:
+            print(f"[-] Invalid SSH identification string from {self.sock.getpeername()[0]}, closing connection.")
+            try:
+                self.sock.sendall(b"Invalid SSH identification string.\n")
+            except:
+                pass
+            self.close()
+            raise paramiko.SSHException(f"Invalid SSH Banner: {buf}")
+
+        self.remote_version = buf
+        self._log(paramiko.common.DEBUG, f"Remote version/idstring: {self.remote_version}")
+
+        i = buf.find(" ")
+        if i >= 0:
+            buf = buf[:i]
+
+        segs = buf.split("-", 2)
+        if len(segs) < 3:
+            raise paramiko.SSHException("Invalid SSH banner")
+        version = segs[1]
+        client = segs[2]
+        if version != "1.99" and version != "2.0":
+            msg = f"Incompatible version ({version} instead of 2.0)"
+            raise paramiko.ssh_exception.IncompatiblePeer(msg)
+        msg = f"Connected (version {version}, client {client})"
+        self._log(paramiko.common.INFO, msg)
+
+def handle_client(client_socket, client_ip):
     try:
+        transport = HoneypotTransport(client_socket)
+        transport.local_version = CUSTOM_BANNER
+
+        transport.add_server_key(HOST_KEY)
+        server = HoneypotHandler(client_ip)
+
         transport.start_server(server=server)
         chan = transport.accept(120)
         if chan is None:
@@ -57,7 +104,7 @@ def handle_client(client_socket, client_ip):
     except Exception as e:
         print(f"[!] Exception: {e}")
     finally:
-        transport.close()
+        client_socket.close()
 
 def start_honeypot(host="0.0.0.0", port=2222):
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
