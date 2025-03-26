@@ -5,11 +5,13 @@ import os
 import re
 import socket
 import threading
+import time
 
 import paramiko # (I'm not cracked enough to rewrite SSH transport... yet)
 
 HOST_KEY_FILE = "host_key.pem"
 CUSTOM_BANNER = "SSH-2.0-OpenSSH_9.9p2 Debian-1"
+FAKE_CREDENTIALS = { "dguy":"dguh", "admin":"password123", "root":"fullpower" }
 
 logging.basicConfig(filename="honeypot.log", level=logging.INFO, format="%(asctime)s - %(message)s")
 
@@ -26,8 +28,16 @@ def load_or_gen_host_key():
 HOST_KEY = load_or_gen_host_key()
 
 def log_attempt(client_ip, username, password):
-    logging.info(f"Connection from {client_ip}, User: {username}, Pass: {password}")
+    logging.info(f"Login attempt from {client_ip}, User: {username}, Pass: {password}")
     print(f"[i] Logged attempt from {client_ip} with {username}:{password}")
+
+def log_success(client_ip, username, password):
+    logging.info(f"Login 'SUCCESS' from {client_ip}, User: {username}, Pass: {password}")
+    print(f"[$] Login 'SUCCESS' from {client_ip}, User: {username}, Pass: {password}")
+
+def log_message(message):
+    logging.info(message)
+    print(f"[m] {message}")
 
 class HoneypotHandler(paramiko.ServerInterface):
     """Handler subclass for the honeypot server."""
@@ -41,9 +51,49 @@ class HoneypotHandler(paramiko.ServerInterface):
         return paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
 
     def check_auth_password(self, username, password):
-        """Always fails authentication"""
         log_attempt(self.client_ip, username, password)
-        return paramiko.AUTH_FAILED # Always fail auth
+        if username in FAKE_CREDENTIALS and FAKE_CREDENTIALS[username] == password:
+            log_success(self.client_ip, username, password)
+            return paramiko.AUTH_SUCCESSFUL
+        return paramiko.AUTH_FAILED
+
+    def get_allowed_auths(self, username):
+            return "password"
+
+    def start_fake_shell(self, chan, user):
+        """Let the trolling begin"""
+        # TODO: Fix SSH client errors (make shell interactive?)
+        # TODO: Add disconnect timeout
+        try:
+            chan.send("\nWelcome to Debian GNU/Linux 11\n")
+            count = 0
+            while count < 21:
+                chan.send(f"{user}@dguyserv:~$")
+                command = chan.recv(1024).decode().strip()
+                count += 1
+                if not command:
+                    break
+
+                if command in ["exit", "logout"]:
+                    chan.send("logout\n")
+                    break
+                elif command in ["whoami"]:
+                    chan.send(f"{user}\n")
+                elif command.startswith("cd"):
+                    chan.send("\n")
+                elif command.startswith("ls"):
+                    chan.send("dguy.png  README.md  temp.txt  passwords.txt\n")
+                elif command.startswith("su"):
+                    time.sleep(2)
+                    chan.send("su: Authentication failure")
+                else:
+                    chan.send(f"-bash: {command}: command not found\n")
+
+        except Exception as e:
+            print(f"[!!] Exception in fake shell: {e}")
+        finally:
+            # TODO: Block IP
+            chan.close()
 
 class HoneypotTransport(paramiko.Transport):
     """Transport subclass to enforce immediate disconnect on invalid content."""
@@ -97,6 +147,14 @@ def handle_client(client_socket, client_ip):
         chan = transport.accept(120)
         if chan is None:
             raise Exception("No channel")
+
+        if not transport.is_authenticated():
+            raise Exception("Transport inactive before authentication")
+
+        username = transport.get_username()
+        if username:
+            print(f"[+++] {client_ip} successfully 'logged in' as {username}")
+            server.start_fake_shell(chan, username)
     except Exception as e:
         print(f"[!] Exception for {client_ip}: {e}")
     finally:
