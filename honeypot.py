@@ -8,11 +8,9 @@ import threading
 
 import paramiko # (I'm not cracked enough to rewrite SSH transport... yet)
 
-# Fake host key
 HOST_KEY_FILE = "host_key.pem"
 CUSTOM_BANNER = "SSH-2.0-OpenSSH_9.9p2 Debian-1"
 
-# Basic Logging
 logging.basicConfig(filename="honeypot.log", level=logging.INFO, format="%(asctime)s - %(message)s")
 
 def load_or_gen_host_key():
@@ -31,7 +29,6 @@ def log_attempt(client_ip, username, password):
     logging.info(f"Connection from {client_ip}, User: {username}, Pass: {password}")
     print(f"[i] Logged attempt from {client_ip} with {username}:{password}")
 
-# Handler
 class HoneypotHandler(paramiko.ServerInterface):
     """Handler subclass for the honeypot server."""
     def __init__(self, client_ip):
