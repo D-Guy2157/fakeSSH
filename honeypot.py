@@ -8,11 +8,10 @@ import threading
 
 import paramiko # (I'm not cracked enough to rewrite SSH transport... yet)
 
-# Fake host key
 HOST_KEY_FILE = "host_key.pem"
 CUSTOM_BANNER = "SSH-2.0-OpenSSH_9.9p2 Debian-1"
+RUNNING = True
 
-# Basic Logging
 logging.basicConfig(filename="honeypot.log", level=logging.INFO, format="%(asctime)s - %(message)s")
 
 def load_or_gen_host_key():
@@ -31,11 +30,8 @@ def log_attempt(client_ip, username, password):
     logging.info(f"Connection from {client_ip}, User: {username}, Pass: {password}")
     print(f"[i] Logged attempt from {client_ip} with {username}:{password}")
 
-# Handler
 class HoneypotHandler(paramiko.ServerInterface):
-    """
-    Handler subclass for the honeypot server.
-    """
+    """Handler subclass for the honeypot server."""
     def __init__(self, client_ip):
         self.client_ip = client_ip
         self.event = threading.Event()
@@ -46,18 +42,14 @@ class HoneypotHandler(paramiko.ServerInterface):
         return paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
 
     def check_auth_password(self, username, password):
-        """Always fails authentication, makes honeypot safe"""
+        """Always fails authentication"""
         log_attempt(self.client_ip, username, password)
-        return paramiko.AUTH_FAILED # Always fail auth
+        return paramiko.AUTH_FAILED
 
 class HoneypotTransport(paramiko.Transport):
-    """
-    Transport subclass to enforce immediate disconnect on invalid content.
-    """
+    """Transport subclass to enforce immediate disconnect on invalid content."""
     def _check_banner(self):
-        """
-        Enforces immediate disconnect on invalid SSH banner. Only reads one line.
-        """
+        """Enforces immediate disconnect on invalid SSH banner. Only reads one line."""
         client_ip = self.sock.getpeername()[0]
         try:
             buf = self.packetizer.readline(self.banner_timeout) # Read only one line
@@ -116,13 +108,37 @@ def start_honeypot(host="0.0.0.0", port=2222):
     server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server_socket.bind((host, port))
     server_socket.listen(5)
+    server_socket.setblocking(False)
     print(f"SSH Honeypot listening on {host}:{port}")
 
-    while True:
-        client_socket, addr = server_socket.accept()
-        print(f"[+] Connection from {addr[0]}:{addr[1]}")
-        threading.Thread(target=handle_client, args=(client_socket, addr[0])).start()
+    while RUNNING:
+        try:
+            client_socket, addr = server_socket.accept()
+            print(f"[+] Connection from {addr[0]}:{addr[1]}")
+            threading.Thread(target=handle_client, args=(client_socket, addr[0])).start()
+        except BlockingIOError:
+            pass # No incoming connections
+        except Exception as e:
+            print(f"[!] Server error: {e}")
 
+    server_socket.close()
+    print("Honeypot stopped.")
+
+def command_listener():
+    global RUNNING
+    while RUNNING:
+        cmd = input().strip().lower()
+        if cmd == "q":
+            print("Quitting...")
+            RUNNING = False
+            break
+
+def main():
+    honeypot_thread = threading.Thread(target=start_honeypot)
+    honeypot_thread.start()
+
+    command_listener()
+    honeypot_thread.join()
 
 if __name__ == "__main__":
-    start_honeypot()
+    main()
