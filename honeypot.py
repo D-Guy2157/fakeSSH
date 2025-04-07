@@ -163,10 +163,14 @@ def handle_fake_shell(chan, user):
     BLUE = "\x1b[1;34m"
     RESET = "\x1b[0m"
     SHELL_STRING = f"{GREEN}{user}@dguyserv{RESET}:{BLUE}~{RESET}$ "
-    chan.send("Welcome to Debian GNU/Linux 11\n\n\r")
+    chan.send("Welcome to Debian GNU/Linux 11\n\r")
     chan.send(SHELL_STRING)
 
     buffer = ""
+    history = []
+    history_index = -1
+    escape_seq = False
+    escape_buffer = ""
 
     # TODO: Add disconnect timeout
     try:
@@ -176,10 +180,33 @@ def handle_fake_shell(chan, user):
                 break
 
             for byte in data:
+                char = chr(byte)
+
+                if escape_seq:
+                    escape_buffer += char
+                    if len(escape_buffer) == 2:
+                        # Arrow key handling
+                        if escape_buffer == "[A": # Up
+                            if history:
+                                history_index = max(0, history_index - 1)
+                                buffer = history[history_index]
+                                chan.send(f"\r\x1b[2K{SHELL_STRING}{buffer}")
+                        elif escape_buffer == "[B": # Down
+                            if history:
+                                history_index = min(len(history), history_index + 1)
+                                buffer = history[history_index] if history_index < len(history) else ""
+                                chan.send(f"\r\x1b[2K{SHELL_STRING}{buffer}")
+                        escape_seq = False
+                        escape_buffer = ""
+                    continue
+
+                if byte == 27: # ESC
+                    escape_seq = True
+                    escape_buffer = ""
+                    continue
                 if byte == 3: # Ctrl-C
                     buffer = ""
-                    chan.send(f"^C\r\n")
-                    chan.send(SHELL_STRING)
+                    chan.send(f"^C\r\n{SHELL_STRING}")
                     continue
                 elif byte == 4: # Ctrl-D
                     chan.send("\r\nlogout\r\n")
@@ -188,6 +215,9 @@ def handle_fake_shell(chan, user):
                     chan.send("\r\n")
                     output, should_exit = handle_fake_command(buffer, user)
                     chan.send(output + "\r\n")
+                    if buffer.strip():
+                        history.append(buffer)
+                    history_index = len(history)
                     if should_exit:
                         chan.send("logout\r\n")
                         return
@@ -197,8 +227,7 @@ def handle_fake_shell(chan, user):
                     if buffer:
                         buffer = buffer[:-1]
                         chan.send("\b \b") # Erase char
-                else:
-                    char = chr(byte)
+                elif 32 <= byte <= 126: # Printable chars
                     buffer += char
                     chan.send(char)
 
