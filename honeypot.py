@@ -128,18 +128,29 @@ def handle_fake_command(command, user):
     elif command.startswith("cd"):
         return "", False
     elif command.startswith("ls"):
-        # TODO: Add ls args
+        if "-la" in command or "-al" in command:
+            return "drwxr-xr-x  2 dguy dguy 4096 Apr  1 17:00 .\r\n" + \
+                   "drwxr-xr-x 15 root root 4096 Apr  1 17:00 ..\r\n" + \
+                   "-rw-r--r--  1 dguy dguy   23 Apr  1 18:01 README.md\r\n" + \
+                   "-rw-r--r--  1 dguy dguy   42 Apr  1 18:02 passwords.txt", False
+        elif "-a" in command:
+            return ".  ..  dguy.png  README.md  temp.txt  passwords.txt", False
+        elif "-l" in command:
+            return "-rw-r--r--  1 dguy dguy   23 Apr  1 18:01 README.md\r\n" + \
+                   "-rw-r--r--  1 dguy dguy   42 Apr  1 18:02 passwords.txt", False
         return "dguy.png  README.md  temp.txt  passwords.txt", False
     elif command.startswith("man"):
         return "I hope you know what you're doing if you made it this far...", False
     elif command.startswith("cat"):
         fake_files = {
-            "README.md": "# Welcome!\nYou successfully cat the readme file. Have fun looking around!\n",
-            "passwords.txt": "dguy:dguh\nadmin:password123\nroot:fullpower\n",
-            "temp.txt": "This is a temp file!\n"
+            "README.md": "# Welcome!\r\nYou successfully cat the readme file. Have fun looking around!",
+            "passwords.txt": "dguy:dguh\r\nadmin:password123\r\nroot:fullpower",
+            "temp.txt": "This is a temp file!"
         }
-        # TODO: Add fake cat stuff
-        return "", False
+        parts = command.split()
+        if len(parts) > 1 and parts[1] in fake_files:
+            return fake_files[parts[1]], False
+        return f"cat: {parts[1] if len(parts) > 1 else ''}: No such file or directory", False
     elif command.startswith("su"):
         time.sleep(2)
         return "su: Authentication failure", False
