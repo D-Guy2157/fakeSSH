@@ -148,8 +148,10 @@ def handle_fake_command(command, user):
 
 def handle_fake_shell(chan, user):
     """Let the trolling begin"""
-    # TODO: Add ANSI coloring
-    SHELL_STRING = f"{user}@dguyserv:~$ "
+    GREEN = "\x1b[1;32m"
+    BLUE = "\x1b[1;34m"
+    RESET = "\x1b[0m"
+    SHELL_STRING = f"{GREEN}{user}@dguyserv{RESET}:{BLUE}~{RESET}$ "
     chan.send("Welcome to Debian GNU/Linux 11\n\n\r")
     chan.send(SHELL_STRING)
 
