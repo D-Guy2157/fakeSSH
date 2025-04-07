@@ -122,40 +122,42 @@ def handle_fake_command(command, user):
         return "", False # Print prompt again
 
     if command in ["exit", "logout"]:
-        return "logout", True
+        return "logout\r\n", True
+    elif command == "clear":
+        return "\x1b[2J\x1b[H", False
     elif command == "whoami":
-        return f"{user}", False
+        return f"{user}\r\n", False
     elif command.startswith("cd"):
-        return "", False
+        return "\r\n", False
     elif command.startswith("ls"):
         if "-la" in command or "-al" in command:
             return "drwxr-xr-x  2 dguy dguy 4096 Apr  1 17:00 .\r\n" + \
                    "drwxr-xr-x 15 root root 4096 Apr  1 17:00 ..\r\n" + \
                    "-rw-r--r--  1 dguy dguy   23 Apr  1 18:01 README.md\r\n" + \
-                   "-rw-r--r--  1 dguy dguy   42 Apr  1 18:02 passwords.txt", False
+                   "-rw-r--r--  1 dguy dguy   42 Apr  1 18:02 passwords.txt\r\n", False
         elif "-a" in command:
             return ".  ..  dguy.png  README.md  temp.txt  passwords.txt", False
         elif "-l" in command:
             return "-rw-r--r--  1 dguy dguy   23 Apr  1 18:01 README.md\r\n" + \
-                   "-rw-r--r--  1 dguy dguy   42 Apr  1 18:02 passwords.txt", False
-        return "dguy.png  README.md  temp.txt  passwords.txt", False
+                   "-rw-r--r--  1 dguy dguy   42 Apr  1 18:02 passwords.txt\r\n", False
+        return "dguy.png  README.md  temp.txt  passwords.txt\r\n", False
     elif command.startswith("man"):
-        return "I hope you know what you're doing if you made it this far...", False
+        return "I hope you know what you're doing if you made it this far...\r\n", False
     elif command.startswith("cat"):
         fake_files = {
-            "README.md": "# Welcome!\r\nYou successfully cat the readme file. Have fun looking around!",
-            "passwords.txt": "dguy:dguh\r\nadmin:password123\r\nroot:fullpower",
-            "temp.txt": "This is a temp file!"
+            "README.md": "# Welcome!\r\nYou successfully cat the readme file. Have fun looking around!\r\n",
+            "passwords.txt": "dguy:dguh\r\nadmin:password123\r\nroot:fullpower\r\n",
+            "temp.txt": "This is a temp file!\r\n"
         }
         parts = command.split()
         if len(parts) > 1 and parts[1] in fake_files:
             return fake_files[parts[1]], False
-        return f"cat: {parts[1] if len(parts) > 1 else ''}: No such file or directory", False
+        return f"cat: {parts[1] if len(parts) > 1 else ''}: No such file or directory\r\n", False
     elif command.startswith("su"):
         time.sleep(2)
-        return "su: Authentication failure", False
+        return "su: Authentication failure\r\n", False
     else:
-        return f"-bash: {command}: command not found", False
+        return f"-bash: {command}: command not found\r\n", False
 
 def handle_fake_shell(chan, user):
     """Let the trolling begin"""
@@ -167,6 +169,7 @@ def handle_fake_shell(chan, user):
     chan.send(SHELL_STRING)
 
     buffer = ""
+    cursor_pos = 0
     history = []
     history_index = -1
     escape_seq = False
@@ -190,12 +193,22 @@ def handle_fake_shell(chan, user):
                             if history:
                                 history_index = max(0, history_index - 1)
                                 buffer = history[history_index]
+                                cursor_pos = len(buffer)
                                 chan.send(f"\r\x1b[2K{SHELL_STRING}{buffer}")
                         elif escape_buffer == "[B": # Down
                             if history:
                                 history_index = min(len(history), history_index + 1)
                                 buffer = history[history_index] if history_index < len(history) else ""
+                                cursor_pos = len(buffer)
                                 chan.send(f"\r\x1b[2K{SHELL_STRING}{buffer}")
+                        elif escape_buffer == "[C": # Right
+                            if cursor_pos < len(buffer):
+                                chan.send("\x1b[C")
+                                cursor_pos += 1
+                        elif escape_buffer == "[D": # Left
+                            if cursor_pos > 0:
+                                chan.send("\x1b[D")
+                                cursor_pos -= 1
                         escape_seq = False
                         escape_buffer = ""
                     continue
@@ -211,10 +224,14 @@ def handle_fake_shell(chan, user):
                 elif byte == 4: # Ctrl-D
                     chan.send("\r\nlogout\r\n")
                     return
+                elif byte == 12: # Ctrl-L
+                    chan.send("\x1b[2J\x1b[H") # Clear screen and reset cursor
+                    chan.send(SHELL_STRING + buffer)
+                    continue
                 elif byte in (10, 13): # Enter
                     chan.send("\r\n")
                     output, should_exit = handle_fake_command(buffer, user)
-                    chan.send(output + "\r\n")
+                    chan.send(output)
                     if buffer.strip():
                         history.append(buffer)
                     history_index = len(history)
@@ -222,14 +239,26 @@ def handle_fake_shell(chan, user):
                         chan.send("logout\r\n")
                         return
                     buffer = ""
+                    cursor_pos = 0
                     chan.send(SHELL_STRING)
                 elif byte in (127, 8): # Backspace
-                    if buffer:
-                        buffer = buffer[:-1]
-                        chan.send("\b \b") # Erase char
+                    if cursor_pos > 0:
+                        buffer = buffer[:cursor_pos - 1] + buffer[cursor_pos:]
+                        cursor_pos -= 1
+                        chan.send("\b")
+                        chan.send(buffer[cursor_pos:] + " ")
+                        chan.send("\b" * (len(buffer) - cursor_pos + 1))
+                elif byte == 126: # DEL
+                    if cursor_pos < len(buffer):
+                        buffer = buffer[:cursor_pos] + buffer[cursor_pos + 1:]
+                        chan.send(buffer[cursor_pos:] + " ")
+                        chan.send("\b" * (len(buffer) - cursor_pos + 1))
                 elif 32 <= byte <= 126: # Printable chars
-                    buffer += char
-                    chan.send(char)
+                    buffer = buffer[:cursor_pos] + char + buffer[cursor_pos:]
+                    cursor_pos += 1
+                    # Print inserted char, move cursor back
+                    chan.send(buffer[cursor_pos - 1:])
+                    chan.send("\b" * (len(buffer) - cursor_pos))
 
     except Exception as e:
         print(f"[!!] Exception in fake shell: {e}")
