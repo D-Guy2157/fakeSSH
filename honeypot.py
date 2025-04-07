@@ -57,43 +57,22 @@ class HoneypotHandler(paramiko.ServerInterface):
             return paramiko.AUTH_SUCCESSFUL
         return paramiko.AUTH_FAILED
 
+    def check_auth_publickey(self, username, key):
+        log_attempt(self.client_ip, username, f"pubkey: {key.get_base64()[:20]}...")
+        return paramiko.AUTH_FAILED
+
     def get_allowed_auths(self, username):
-            return "password"
+            return "publickey,password"
 
-    def start_fake_shell(self, chan, user):
-        """Let the trolling begin"""
-        # TODO: Fix SSH client errors (make shell interactive?)
-        # TODO: Add disconnect timeout
-        try:
-            chan.send("\nWelcome to Debian GNU/Linux 11\n")
-            count = 0
-            while count < 21:
-                chan.send(f"{user}@dguyserv:~$")
-                command = chan.recv(1024).decode().strip()
-                count += 1
-                if not command:
-                    break
+    def check_channel_shell_request(self, channel):
+        self.event.set()
+        return True
 
-                if command in ["exit", "logout"]:
-                    chan.send("logout\n")
-                    break
-                elif command in ["whoami"]:
-                    chan.send(f"{user}\n")
-                elif command.startswith("cd"):
-                    chan.send("\n")
-                elif command.startswith("ls"):
-                    chan.send("dguy.png  README.md  temp.txt  passwords.txt\n")
-                elif command.startswith("su"):
-                    time.sleep(2)
-                    chan.send("su: Authentication failure")
-                else:
-                    chan.send(f"-bash: {command}: command not found\n")
-
-        except Exception as e:
-            print(f"[!!] Exception in fake shell: {e}")
-        finally:
-            # TODO: Block IP
-            chan.close()
+    def check_channel_pty_request(self, channel, term, width, height, pixelwidth, pixelheight, modes):
+        self.pty_term = term
+        self.pty_width = width
+        self.pty_height = height
+        return True
 
 class HoneypotTransport(paramiko.Transport):
     """Transport subclass to enforce immediate disconnect on invalid content."""
@@ -135,6 +114,87 @@ class HoneypotTransport(paramiko.Transport):
         self._log(paramiko.common.INFO, msg)
         print(f"[++] Valid SSH banner received from {client_ip}: {self.remote_version}")
 
+
+def handle_fake_command(command, user):
+    command = command.strip()
+
+    if not command:
+        return "", False # Print prompt again
+
+    if command in ["exit", "logout"]:
+        return "logout", True
+    elif command == "whoami":
+        return f"{user}", False
+    elif command.startswith("cd"):
+        return "", False
+    elif command.startswith("ls"):
+        # TODO: Add ls args
+        return "dguy.png  README.md  temp.txt  passwords.txt", False
+    elif command.startswith("man"):
+        return "I hope you know what you're doing if you made it this far...", False
+    elif command.startswith("cat"):
+        fake_files = {
+            "README.md": "# Welcome!\nYou successfully cat the readme file. Have fun looking around!\n",
+            "passwords.txt": "dguy:dguh\nadmin:password123\nroot:fullpower\n",
+            "temp.txt": "This is a temp file!\n"
+        }
+        # TODO: Add fake cat stuff
+        return "", False
+    elif command.startswith("su"):
+        time.sleep(2)
+        return "su: Authentication failure", False
+    else:
+        return f"-bash: {command}: command not found", False
+
+def handle_fake_shell(chan, user):
+    """Let the trolling begin"""
+    # TODO: Add ANSI coloring
+    SHELL_STRING = f"{user}@dguyserv:~$ "
+    chan.send("Welcome to Debian GNU/Linux 11\n\n\r")
+    chan.send(SHELL_STRING)
+
+    buffer = ""
+
+    # TODO: Add disconnect timeout
+    try:
+        while True:
+            data = chan.recv(1024)
+            if not data:
+                break
+
+            for byte in data:
+                if byte == 3: # Ctrl-C
+                    buffer = ""
+                    chan.send(f"^C\r\n")
+                    chan.send(SHELL_STRING)
+                    continue
+                elif byte == 4: # Ctrl-D
+                    chan.send("\r\nlogout\r\n")
+                    return
+                elif byte in (10, 13): # Enter
+                    chan.send("\r\n")
+                    output, should_exit = handle_fake_command(buffer, user)
+                    chan.send(output + "\r\n")
+                    if should_exit:
+                        chan.send("logout\r\n")
+                        return
+                    buffer = ""
+                    chan.send(SHELL_STRING)
+                elif byte in (127, 8): # Backspace
+                    if buffer:
+                        buffer = buffer[:-1]
+                        chan.send("\b \b") # Erase char
+                else:
+                    char = chr(byte)
+                    buffer += char
+                    chan.send(char)
+
+    except Exception as e:
+        print(f"[!!] Exception in fake shell: {e}")
+    finally:
+        # TODO: Block IP
+        chan.close()
+
 def handle_client(client_socket, client_ip):
     try:
         transport = HoneypotTransport(client_socket)
@@ -154,10 +214,11 @@ def handle_client(client_socket, client_ip):
         username = transport.get_username()
         if username:
             print(f"[+++] {client_ip} successfully 'logged in' as {username}")
-            server.start_fake_shell(chan, username)
+            handle_fake_shell(chan, username)
     except Exception as e:
         print(f"[!] Exception for {client_ip}: {e}")
     finally:
+        print(f"[---] Connection to {client_ip} closed.")
         client_socket.close()
 
 def start_honeypot(host="0.0.0.0", port=2222):
