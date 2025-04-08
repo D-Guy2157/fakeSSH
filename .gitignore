@@ -26,3 +26,6 @@ __MACOSX
 
 # JetBrains yippee
 .idea
+
+# Dotenv
+.env
