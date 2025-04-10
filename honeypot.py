@@ -8,6 +8,8 @@ import struct
 import threading
 import time
 import requests
+import signal
+import sys
 from dotenv import load_dotenv
 import paramiko # (I'm not cracked enough to rewrite SSH transport... yet)
 
@@ -17,7 +19,7 @@ DISCORD_WEBHOOK = os.getenv("WEBHOOK")
 BANNED_IPS_FILE = "banned_ips.txt"
 HOST_KEY_FILE = "host_key.pem"
 CUSTOM_BANNER = "SSH-2.0-OpenSSH_9.9p2 Debian-1"
-FAKE_CREDENTIALS = { "dguy":"dguh", "admin":"password123", "root":"fullpower" }
+FAKE_CREDENTIALS = { "dguy":"dguh", "admin":"password", "root":"fullpower"}
 GREEN = "\x1b[1;32m"
 BLUE = "\x1b[1;34m"
 RESET = "\x1b[0m"
@@ -29,6 +31,10 @@ try:
         BANNED_IPS = set(f.read().splitlines())
 except FileNotFoundError:
     BANNED_IPS = set()
+
+def graceful_shutdown(signum, frame):
+    print("\n[!] Caught interrupt signal (Ctrl+C). Shutting down...")
+    sys.exit(0)
 
 def load_or_gen_host_key():
     if os.path.exists(HOST_KEY_FILE):
@@ -56,6 +62,10 @@ def reset_connection(sock):
         sock.close()
     except Exception as e:
         print(f"[!] Error resetting connection: {e}")
+
+def log_connection_ip(ip):
+    with open("ips.log", "a") as f:
+        f.write(ip + "\n")
 
 def log_banned_attempt(client_ip):
     logging.info(f"{client_ip} is banned. Resetting connection.")
@@ -130,7 +140,7 @@ class HoneypotHandler(paramiko.ServerInterface):
         key_base64 = key.get_base64()
         log_message(f"(pubkey) Public key attempt from {self.client_ip}")
 
-        with open("publickey_log.txt", "a") as publog:
+        with open("publickeys.log", "a") as publog:
             publog.write(f"{self.client_ip} - {username}\n\tFingerprint: {key_fingerprint}\n\tType: {key_type}, Bits: {key_bits}\n\tKey: {key_base64}\n\n")
         log_attempt(self.client_ip, username, f"pubkey: {key.get_base64()[:20]}...")
         return paramiko.AUTH_FAILED
@@ -358,6 +368,7 @@ def handle_client(client_socket, client_ip):
         reset_connection(client_socket)
         return
 
+    log_connection_ip(client_ip)
     timer = Timer()
     try:
         timer.checkpoint("Connection accepted")
@@ -401,11 +412,23 @@ def start_honeypot(host="0.0.0.0", port=2222):
     server_socket.listen(5)
     print(f"SSH Honeypot listening on {host}:{port}")
 
-    while True:
-        client_socket, addr = server_socket.accept()
-        print(f"[+] Connection from {addr[0]}:{addr[1]}")
-        threading.Thread(target=handle_client, args=(client_socket, addr[0])).start()
+    try:
+        while True:
+            try:
+                client_socket, addr = server_socket.accept()
+                print(f"[+] Connection from {addr[0]}:{addr[1]}")
+                threading.Thread(target=handle_client, args=(client_socket, addr[0])).start()
+            except OSError:
+                break
+    except Exception as e:
+        print(f"[!] Unhandled exception in main loop: {e}")
 
+    finally:
+        server_socket.close()
+        print("[*] Server socket closed.")
+
+signal.signal(signal.SIGINT, graceful_shutdown)
+signal.signal(signal.SIGTERM, graceful_shutdown)
 
 if __name__ == "__main__":
     start_honeypot()
