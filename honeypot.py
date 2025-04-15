@@ -326,6 +326,7 @@ def handle_fake_shell(chan, user):
                     continue
                 elif byte in (10, 13): # Enter
                     chan.send("\r\n")
+                    log_command(chan.origin_addr, user, buffer.strip())
                     output, should_exit = handle_fake_command(buffer, user)
                     chan.send(output)
                     if buffer.strip():
@@ -393,6 +394,7 @@ def handle_client(client_socket, client_ip):
         if not transport.is_authenticated():
             raise Exception("Transport inactive before authentication")
 
+        chan.origin_addr = client_ip
         username = transport.get_username()
         timer.checkpoint(f"Authenticated as {username}")
 
